@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from factory.spec.generate import collect_source_files, generate_spec, group_into_batches
+from factory.spec.generate import generate_spec
 from factory.spec.ops import (
     get_impact,
     scope_diff,
@@ -32,10 +32,8 @@ def read_spec(project_path: Path) -> str:
 
 
 __all__ = [
-    "collect_source_files",
     "generate_spec",
     "get_impact",
-    "group_into_batches",
     "load_graph",
     "read_spec",
     "resolve_community",
