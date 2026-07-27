@@ -2205,6 +2205,14 @@ def spec_update_workflow() -> Workflow:
     nodes: dict[str, Any] = {}
     edges: list[Edge] = []
 
+    # Incremental graph refresh — local AST, no LLM cost
+    nodes["graph_update"] = FnNode(
+        id="graph_update",
+        command="factory graph update {project_path}",
+        notes="Refresh the code knowledge graph with latest source changes before scoping the diff.",
+        writes={".factory/graphify-out/graph.json"},
+    )
+
     # Diff scoping — map changed files to affected modules
     nodes["diff_scope"] = FnNode(
         id="diff_scope",
@@ -2270,6 +2278,7 @@ def spec_update_workflow() -> Workflow:
     )
 
     edges = [
+        Edge(source="graph_update", target="diff_scope"),
         Edge(source="diff_scope", target="patch"),
         Edge(source="patch", target="gate_patch"),
         Edge(source="gate_patch", target="revalidate", condition=VerdictType.PROCEED),
@@ -2282,7 +2291,7 @@ def spec_update_workflow() -> Workflow:
         name="spec-update",
         nodes=nodes,
         edges=edges,
-        start_node="diff_scope",
+        start_node="graph_update",
         trigger=None,
     )
 

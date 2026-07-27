@@ -398,12 +398,24 @@ class TestSpecUpdateWorkflow:
         assert spec_update_workflow().name == "spec-update"
 
     def test_start_node(self) -> None:
-        assert spec_update_workflow().start_node == "diff_scope"
+        assert spec_update_workflow().start_node == "graph_update"
 
     def test_has_required_nodes(self) -> None:
         wf = spec_update_workflow()
-        expected = {"diff_scope", "patch", "gate_patch", "revalidate", "gate_revalidate"}
+        expected = {
+            "graph_update",
+            "diff_scope",
+            "patch",
+            "gate_patch",
+            "revalidate",
+            "gate_revalidate",
+        }
         assert expected == set(wf.nodes.keys())
+
+    def test_graph_update_is_fn(self) -> None:
+        node = spec_update_workflow().nodes["graph_update"]
+        assert isinstance(node, FnNode)
+        assert "factory graph update" in node.command
 
     def test_diff_scope_is_fn(self) -> None:
         node = spec_update_workflow().nodes["diff_scope"]
