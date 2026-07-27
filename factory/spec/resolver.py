@@ -47,7 +47,7 @@ def load_graph(project_path: Path) -> nx.DiGraph | None:
 
         log.debug("resolver.load_graph", nodes=G.number_of_nodes(), edges=G.number_of_edges())
         return G
-    except Exception as exc:
+    except (KeyError, TypeError, nx.NetworkXError) as exc:
         log.warning("resolver.load_graph.failed", error=str(exc))
         return None
 
@@ -129,7 +129,7 @@ def resolve_query(query: str, project_path: Path) -> str:
     """Run graphify query CLI and return the result."""
     try:
         result = subprocess.run(
-            ["graphify", "query", query, "--project-dir", str(project_path)],
+            ["graphify", "query", "--project-dir", str(project_path), "--", query],
             capture_output=True,
             text=True,
             timeout=30,
