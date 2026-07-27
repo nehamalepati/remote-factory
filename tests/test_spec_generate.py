@@ -136,12 +136,11 @@ class TestSpecGenerateWorkflow:
         }
         assert expected == set(wf.nodes.keys())
 
-    def test_extract_is_opus(self) -> None:
+    def test_extract_is_fn(self) -> None:
         wf = spec_generate_workflow()
         extract = wf.nodes["extract"]
-        assert isinstance(extract, AgentNode)
-        assert extract.role == AgentRole.RESEARCHER
-        assert extract.model == "opus"
+        assert isinstance(extract, FnNode)
+        assert "factory graph extract" in extract.command
 
     def test_annotate_is_researcher(self) -> None:
         wf = spec_generate_workflow()
@@ -163,10 +162,10 @@ class TestSpecGenerateWorkflow:
         assert isinstance(node, FnNode)
         assert "factory spec validate" in node.command
 
-    def test_extract_writes_spec_raw(self) -> None:
+    def test_extract_writes_graph(self) -> None:
         wf = spec_generate_workflow()
         extract = wf.nodes["extract"]
-        assert ".factory/spec_raw.md" in extract.writes
+        assert ".factory/graphify-out/graph.json" in extract.writes
 
     def test_annotate_writes_repo_spec(self) -> None:
         wf = spec_generate_workflow()
@@ -247,7 +246,7 @@ class TestGenerateSpecGraph:
         assert "Code Knowledge Graph Summary" in captured_tasks[0]
         assert "Engine" in captured_tasks[0]
 
-    async def test_graph_path_no_batch_agents(self, tmp_path: Path) -> None:
+    async def test_single_agent_invocation(self, tmp_path: Path) -> None:
         (tmp_path / "main.py").write_text("x = 1")
         repo_spec = tmp_path / "SPEC.md"
         graph_data = {"nodes": [{"name": "main", "type": "module"}], "edges": []}
