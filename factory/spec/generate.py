@@ -266,6 +266,10 @@ def build_graph_summary(graph_data: dict, char_limit: int = GRAPH_SUMMARY_CHAR_L
             lines.append("(truncated — graph summary exceeds size limit)")
             break
 
+    current_len = len("\n".join(lines))
+    if current_len >= char_limit:
+        return "\n".join(lines)
+
     lines.append("## Key Relationships\n")
     remaining = char_limit - len("\n".join(lines))
     rel_lines: list[str] = []
