@@ -260,7 +260,7 @@ def _graph_context_for_diff(diff_text: str, project_path: Path) -> str:
         if line.startswith("diff --git"):
             parts = line.split()
             if len(parts) >= 3:
-                path = parts[2].lstrip("a/")
+                path = parts[2].removeprefix("a/")
                 changed_files.add(path)
         elif line.startswith("+++ b/"):
             changed_files.add(line[6:])
