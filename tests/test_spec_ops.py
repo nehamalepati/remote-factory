@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from factory.spec.ops import _parse_verdict, validate_spec
+from factory.spec.ops import (
+    _parse_verdict,
+    validate_spec,
+)
 from factory.workflow.definitions import (
     improve_workflow,
     spec_update_workflow,
@@ -574,3 +577,203 @@ class TestCmdSpecImpact:
         (tmp_path / "SPEC.md").write_text(BASIC_SPEC)
         args = argparse.Namespace(project=str(tmp_path), module="models")
         assert cmd_spec_impact(args) == 0
+
+
+# ── Graph reference validation ──────────────────────────────────
+
+
+def _setup_graph(tmp_path: Path, nodes: list[dict], edges: list[dict] | None = None) -> None:
+    import json
+
+    gdir = tmp_path / ".factory" / "graphify-out"
+    gdir.mkdir(parents=True, exist_ok=True)
+    data = {"nodes": nodes, "edges": edges or []}
+    (gdir / "graph.json").write_text(json.dumps(data))
+
+
+class TestValidateGraphReferences:
+    def test_returns_empty_when_no_graph(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _validate_graph_references
+
+        result = _validate_graph_references("[[graph:Foo]]", tmp_path)
+        assert result == ""
+
+    def test_reports_resolved_and_orphans(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _validate_graph_references
+
+        _setup_graph(tmp_path, [{"id": "Foo", "type": "class"}])
+        spec = "See [[graph:Foo]] and [[graph:Missing]]."
+        result = _validate_graph_references(spec, tmp_path)
+        assert "Resolved: 1" in result
+        assert "Orphans: 1" in result
+        assert "Missing" in result
+
+    def test_validates_typed_entity_refs(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _validate_graph_references
+
+        _setup_graph(tmp_path, [{"id": "Bar"}])
+        spec = "[[graph:entity:Bar]] and [[graph:entity:Gone]]"
+        result = _validate_graph_references(spec, tmp_path)
+        assert "Resolved: 1" in result
+        assert "Gone" in result
+
+    def test_validates_community_refs(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _validate_graph_references
+
+        _setup_graph(tmp_path, [{"id": "A", "community": "core"}])
+        spec = "[[graph:community:core]] and [[graph:community:missing]]"
+        result = _validate_graph_references(spec, tmp_path)
+        assert "Resolved: 1" in result
+        assert "community:missing" in result
+
+    def test_deduplicates_refs(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _validate_graph_references
+
+        _setup_graph(tmp_path, [{"id": "X"}])
+        spec = "[[graph:X]] and [[graph:X]] repeated."
+        result = _validate_graph_references(spec, tmp_path)
+        assert "Resolved: 1" in result
+        assert "Orphans: 0" in result
+
+    def test_returns_empty_when_no_refs(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _validate_graph_references
+
+        _setup_graph(tmp_path, [{"id": "A"}])
+        result = _validate_graph_references("No refs here.", tmp_path)
+        assert result == ""
+
+
+# ── Graph context for diff ──────────────────────────────────────
+
+
+class TestGraphContextForDiff:
+    def test_returns_empty_when_no_graph(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_context_for_diff
+
+        diff = "diff --git a/foo.py b/foo.py\n+++ b/foo.py"
+        result = _graph_context_for_diff(diff, tmp_path)
+        assert result == ""
+
+    def test_extracts_changed_files_and_neighbors(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_context_for_diff
+
+        _setup_graph(
+            tmp_path,
+            [{"id": "foo.py"}, {"id": "bar.py"}, {"id": "baz.py"}],
+            [{"source": "foo.py", "target": "bar.py"}, {"source": "baz.py", "target": "foo.py"}],
+        )
+        diff = "diff --git a/foo.py b/foo.py\n+++ b/foo.py\n"
+        result = _graph_context_for_diff(diff, tmp_path)
+        assert "foo.py" in result
+        assert "bar.py" in result
+        assert "baz.py" in result
+
+    def test_falls_back_to_stem_lookup(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_context_for_diff
+
+        _setup_graph(
+            tmp_path,
+            [{"id": "foo"}, {"id": "dep"}],
+            [{"source": "foo", "target": "dep"}],
+        )
+        diff = "diff --git a/src/foo.py b/src/foo.py\n+++ b/src/foo.py\n"
+        result = _graph_context_for_diff(diff, tmp_path)
+        assert "dep" in result
+
+    def test_returns_empty_for_empty_diff(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_context_for_diff
+
+        _setup_graph(tmp_path, [{"id": "A"}])
+        result = _graph_context_for_diff("", tmp_path)
+        assert result == ""
+
+    def test_returns_empty_when_no_files_in_graph(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_context_for_diff
+
+        _setup_graph(tmp_path, [{"id": "unrelated"}])
+        diff = "diff --git a/other.py b/other.py\n+++ b/other.py\n"
+        result = _graph_context_for_diff(diff, tmp_path)
+        assert result == ""
+
+    def test_truncates_neighbors_over_10(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_context_for_diff
+
+        neighbors = [{"id": f"dep{i}"} for i in range(12)]
+        edges = [{"source": "main.py", "target": f"dep{i}"} for i in range(12)]
+        _setup_graph(tmp_path, [{"id": "main.py"}, *neighbors], edges)
+        diff = "diff --git a/main.py b/main.py\n+++ b/main.py\n"
+        result = _graph_context_for_diff(diff, tmp_path)
+        assert "+2 more" in result
+
+
+# ── Graph impact ────────────────────────────────────────────────
+
+
+class TestGraphImpact:
+    def test_returns_none_when_no_graph(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_impact
+
+        assert _graph_impact("foo", tmp_path) is None
+
+    def test_returns_none_when_node_not_found(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_impact
+
+        _setup_graph(tmp_path, [{"id": "bar"}])
+        assert _graph_impact("missing", tmp_path) is None
+
+    def test_basic_impact(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_impact
+
+        _setup_graph(
+            tmp_path,
+            [
+                {"id": "store", "type": "module", "file": "factory/store.py", "community": "core"},
+                {"id": "dep1"},
+                {"id": "caller1"},
+            ],
+            [
+                {"source": "store", "target": "dep1", "type": "imports"},
+                {"source": "caller1", "target": "store", "type": "calls"},
+            ],
+        )
+        result = _graph_impact("store", tmp_path)
+        assert result is not None
+        assert "## Impact: store" in result
+        assert "factory/store.py" in result
+        assert "Type: module" in result
+        assert "dep1" in result
+        assert "imports" in result
+        assert "caller1" in result
+        assert "**Community:** core" in result
+        assert "LOW" in result
+
+    def test_high_severity_with_many_dependents(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_impact
+
+        dependents = [{"id": f"caller{i}"} for i in range(8)]
+        edges = [{"source": f"caller{i}", "target": "hub", "type": "calls"} for i in range(8)]
+        _setup_graph(tmp_path, [{"id": "hub"}, *dependents], edges)
+        result = _graph_impact("hub", tmp_path)
+        assert result is not None
+        assert "HIGH" in result
+        assert "8 direct dependents" in result
+
+    def test_medium_severity(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_impact
+
+        dependents = [{"id": f"c{i}"} for i in range(4)]
+        edges = [{"source": f"c{i}", "target": "mid"} for i in range(4)]
+        _setup_graph(tmp_path, [{"id": "mid"}, *dependents], edges)
+        result = _graph_impact("mid", tmp_path)
+        assert result is not None
+        assert "MEDIUM" in result
+
+    def test_truncates_long_dep_lists(self, tmp_path: Path) -> None:
+        from factory.spec.ops import _graph_impact
+
+        deps = [{"id": f"dep{i}"} for i in range(20)]
+        edges = [{"source": "root", "target": f"dep{i}"} for i in range(20)]
+        _setup_graph(tmp_path, [{"id": "root"}, *deps], edges)
+        result = _graph_impact("root", tmp_path)
+        assert result is not None
+        assert "… and 5 more" in result
