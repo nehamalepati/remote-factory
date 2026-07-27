@@ -2079,20 +2079,12 @@ def spec_generate_workflow() -> Workflow:
     nodes: dict[str, Any] = {}
     edges: list[Edge] = []
 
-    # Opus extraction — produces spec_raw.md
-    nodes["extract"] = AgentNode(
+    # Graphify extraction — produces graph.json (local AST, no LLM cost)
+    nodes["extract"] = FnNode(
         id="extract",
-        role=AgentRole.RESEARCHER,
-        model="opus",
-        prompt_template=(
-            "Extract a behavioral module map from the project. "
-            "Read the spec_extractor prompt at factory/agents/prompts/spec_extractor.md. "
-            "Identify module boundaries, domain entities, state machines, error types, "
-            "and module relationships expressed as prose. "
-            "Stay at module-level granularity. "
-            "Write output to .factory/spec_raw.md in the structured Markdown format."
-        ),
-        writes={".factory/spec_raw.md"},
+        command="factory graph extract {project_path}",
+        notes="Run graphify to extract a code knowledge graph from the project source.",
+        writes={".factory/graphify-out/graph.json"},
     )
 
     # CEO gate — check extraction quality
@@ -2101,26 +2093,25 @@ def spec_generate_workflow() -> Workflow:
         evaluator_type="agent",
         evaluator_role=AgentRole.CEO,
         gate_prompt=(
-            "Review the extracted spec at .factory/spec_raw.md. "
-            "Check: are modules identified correctly? Are domain entities captured? "
-            "Are state machines documented? Any major gaps? "
-            "PROCEED if the extraction is usable. RELOOP if major gaps."
+            "Check that .factory/graphify-out/graph.json was produced. "
+            "Verify it contains nodes and edges. "
+            "PROCEED if the graph was extracted successfully. RELOOP if missing or empty."
         ),
-        reads={".factory/spec_raw.md"},
+        reads={".factory/graphify-out/graph.json"},
     )
 
-    # Researcher annotation — produces SPEC.md at project root
+    # Researcher annotation — reads graph.json directly, produces SPEC.md
     nodes["annotate"] = AgentNode(
         id="annotate",
         role=AgentRole.RESEARCHER,
         prompt_template=(
-            "Annotate the raw spec at .factory/spec_raw.md. "
+            "Read the code knowledge graph at .factory/graphify-out/graph.json. "
             "Read the spec_annotator prompt at factory/agents/prompts/spec_annotator.md. "
-            "Produce a behavioral spec with RFC 2119 normative language, "
-            "domain model, state machines, failure model, and module behavioral contracts. "
+            "Produce a two-tier behavioral spec with RFC 2119 normative language. "
+            "Use [[graph:...]] reference links for granular module details. "
             "Write output to SPEC.md in the project root."
         ),
-        reads={".factory/spec_raw.md"},
+        reads={".factory/graphify-out/graph.json"},
         writes={"SPEC.md"},
     )
 
@@ -2425,11 +2416,13 @@ def parallel_improve_workflow() -> Workflow:
         new_node = node.model_copy(update={"id": new_id})
         exp_dq_nodes[new_id] = new_node
     for edge in dq_edges:
-        exp_dq_edges.append(Edge(
-            source=dq_rename[edge.source],
-            target=dq_rename[edge.target],
-            condition=edge.condition,
-        ))
+        exp_dq_edges.append(
+            Edge(
+                source=dq_rename[edge.source],
+                target=dq_rename[edge.target],
+                condition=edge.condition,
+            )
+        )
     nodes.update(exp_dq_nodes)
 
     nodes["exp_gate_qa"] = GateNode(
@@ -2520,25 +2513,31 @@ def parallel_improve_workflow() -> Workflow:
     ]
 
     # Per-experiment subgraph edges
-    edges.extend([
-        Edge(source="exp_begin", target="exp_builder"),
-        Edge(source="exp_builder", target="exp_gate_build"),
-        Edge(source="exp_gate_build", target="exp_health_checker", condition=VerdictType.PROCEED),
-        Edge(source="exp_gate_build", target="exp_builder", condition=VerdictType.RELOOP),
-        *exp_dq_edges,
-        Edge(source="exp_adversarial_tester", target="exp_gate_qa"),
-        Edge(source="exp_gate_qa", target="exp_gate_precheck", condition=VerdictType.PROCEED),
-        Edge(source="exp_gate_qa", target="exp_builder", condition=VerdictType.RELOOP),
-        Edge(source="exp_gate_precheck", target="exp_eval", condition=VerdictType.PROCEED),
-        Edge(source="exp_gate_precheck", target="exp_eval", condition=VerdictType.HALT),
-    ])
+    edges.extend(
+        [
+            Edge(source="exp_begin", target="exp_builder"),
+            Edge(source="exp_builder", target="exp_gate_build"),
+            Edge(
+                source="exp_gate_build", target="exp_health_checker", condition=VerdictType.PROCEED
+            ),
+            Edge(source="exp_gate_build", target="exp_builder", condition=VerdictType.RELOOP),
+            *exp_dq_edges,
+            Edge(source="exp_adversarial_tester", target="exp_gate_qa"),
+            Edge(source="exp_gate_qa", target="exp_gate_precheck", condition=VerdictType.PROCEED),
+            Edge(source="exp_gate_qa", target="exp_builder", condition=VerdictType.RELOOP),
+            Edge(source="exp_gate_precheck", target="exp_eval", condition=VerdictType.PROCEED),
+            Edge(source="exp_gate_precheck", target="exp_eval", condition=VerdictType.HALT),
+        ]
+    )
 
     # Fork → Join → Select → Archive
-    edges.extend([
-        Edge(source="fork_experiments", target="join_experiments"),
-        Edge(source="join_experiments", target="select_best"),
-        Edge(source="select_best", target="archivist"),
-    ])
+    edges.extend(
+        [
+            Edge(source="fork_experiments", target="join_experiments"),
+            Edge(source="join_experiments", target="select_best"),
+            Edge(source="select_best", target="archivist"),
+        ]
+    )
 
     def trigger(state: ProjectState, ctx: dict[str, Any]) -> bool:
         return state == ProjectState.HAS_FACTORY and ctx.get("mode") == "parallel-improve"
