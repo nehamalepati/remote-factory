@@ -34,15 +34,4 @@ def generate_spec(project_path: Path) -> str:
     from factory.spec.generate import generate_spec as _generate_spec
 
     spec_path = asyncio.run(_generate_spec(project_path))
-
-    from factory.graph import extract_graph, is_graphify_installed
-
-    if is_graphify_installed():
-        log.info("spec.generate.graph_extract", reason="graphify available, auto-extracting graph")
-        extract_graph(project_path)
-    else:
-        log.info(
-            "spec.generate.graph_skip", reason="graphify not installed, skipping graph extraction"
-        )
-
     return spec_path.read_text()
