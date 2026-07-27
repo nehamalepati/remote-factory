@@ -128,11 +128,16 @@ def build_graph_summary(graph_data: dict, char_limit: int = GRAPH_SUMMARY_CHAR_L
     return "\n".join(lines)
 
 
-def _build_annotate_prompt(source_context: str, project_path: Path) -> str:
+def _build_annotate_prompt(project_path: Path) -> str:
     """Build the annotator agent prompt for producing SPEC.md."""
+    graph_path = project_path / ".factory" / "graphify-out" / "graph.json"
     return (
         f"Generate a HIGH-LEVEL behavioral overview spec for the project at {project_path}.\n\n"
-        f"## Source Context\n\n{source_context}\n\n"
+        f"## Source Context\n\n"
+        f"Read the code knowledge graph at {graph_path}. "
+        f"It contains AST-derived entities (modules, classes, functions) with their types, "
+        f"communities, and typed relationships (imports, calls, inherits).\n\n"
+        f"Read the spec_annotator prompt at factory/agents/prompts/spec_annotator.md.\n\n"
         f"Produce a spec with RFC 2119 normative language.\n\n"
         f"## Format\n\n"
         f"The spec MUST be structured as a two-tier overview document:\n"
@@ -170,14 +175,13 @@ async def generate_spec(project_path: Path) -> Path:
     """Generate a repo spec for a project.
 
     1. Run graphify extract → graph.json (local AST, no LLM cost)
-    2. Build a compact graph summary with qualified Python names
-    3. Single annotator agent reads summary → produces SPEC.md
+    2. Annotator agent reads graph.json directly → produces SPEC.md
 
     Returns the path to the generated SPEC.md.
     Raises RuntimeError if graphify is not installed or extraction fails.
     """
     from factory.agents.runner import invoke_agent
-    from factory.graph import extract_graph, is_graphify_installed, load_graph_data
+    from factory.graph import extract_graph, is_graphify_installed
 
     if not is_graphify_installed():
         raise RuntimeError(
@@ -191,18 +195,9 @@ async def generate_spec(project_path: Path) -> Path:
     if graph_path is None:
         raise RuntimeError("graphify extraction failed — check logs for details")
 
-    graph_data = load_graph_data(project_path)
-    if graph_data is None:
-        raise RuntimeError("graph.json is unreadable after extraction")
+    log.info("spec.generate.graph", graph_path=str(graph_path))
 
-    summary = build_graph_summary(graph_data)
-    log.info("spec.generate.graph", summary_len=len(summary))
-
-    annotate_task = _build_annotate_prompt(
-        f"The following is a structural summary extracted from the code knowledge graph:\n\n"
-        f"{summary}",
-        project_path,
-    )
+    annotate_task = _build_annotate_prompt(project_path)
 
     result, code = await invoke_agent(
         "researcher",
